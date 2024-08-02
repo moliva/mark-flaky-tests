@@ -37,6 +37,7 @@ pub fn flaky(
     };
     let mut func = syn::parse_macro_input!(body as syn::ItemFn);
     let name = &func.sig.ident;
+    let args = &func.sig.inputs;
     let return_ty = &func.sig.output;
 
     let mut tokio = None;
@@ -68,16 +69,35 @@ pub fn flaky(
         }
     });
 
-    let (test_attr, catch_unwind, async_, await_) = match (tokio, sqlx) {
-        (Some(attr), None) | (None, Some(attr)) => (
+    let (test_attr, catch_unwind, async_, await_, inputs) = match (tokio, sqlx) {
+        (Some(attr), None) => (
             quote!(#attr),
             quote!(::#self_crate::_priv::futures::future::FutureExt::catch_unwind(#name())),
             quote!(async),
             quote!(.await),
+            quote!(),
         ),
+        (None, Some(attr)) => {
+            let pool = match args.first().expect("pool") {
+                syn::FnArg::Typed(pat) => match &*pat.pat {
+                    syn::Pat::Ident(pat) => &pat.ident,
+                    _ => unreachable!("unsupported pattern"),
+                },
+                _ => unreachable!("unsupported pattern"),
+            };
+
+            (
+                quote!(#attr),
+                quote!(::#self_crate::_priv::futures::future::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(#name(#pool .clone())))),
+                quote!(async),
+                quote!(.await),
+                quote!(#pool.clone()),
+            )
+        }
         (None, None) => (
             quote!(#[test]),
             quote!(::std::panic::catch_unwind(#name)),
+            quote!(),
             quote!(),
             quote!(),
         ),
@@ -87,7 +107,7 @@ pub fn flaky(
     quote! {
         #test_attr
         #(#attrs)*
-        #async_ fn #name() #return_ty {
+        #async_ fn #name(#args) #return_ty {
             #func
 
             let retries_var = ::std::env::var("MARK_FLAKY_TESTS_RETRIES");
@@ -102,7 +122,7 @@ pub fn flaky(
 
             if strict {
                 for _ in 0..(retries - 1) {
-                    let res = #name() #await_;
+                    let res = #name(#inputs) #await_;
                     if #self_crate::_priv::IsFailure::is_failure(&res) {
                         return res;
                     }
@@ -117,7 +137,7 @@ pub fn flaky(
                 }
             }
 
-            #name() #await_
+            #name(#inputs) #await_
         }
     }
     .into()

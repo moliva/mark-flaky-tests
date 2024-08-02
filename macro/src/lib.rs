@@ -40,6 +40,7 @@ pub fn flaky(
     let return_ty = &func.sig.output;
 
     let mut tokio = None;
+    let mut sqlx = None;
     let mut attrs = Vec::new();
     func.attrs.retain(|attr| {
         let path = attr.path();
@@ -51,6 +52,12 @@ pub fn flaky(
         {
             tokio = Some(attr.clone());
             false
+        } else if path.segments.len() == 2
+            && path.segments[0].ident == "sqlx"
+            && path.segments[1].ident == "test"
+        {
+            sqlx = Some(attr.clone());
+            false
         } else if path.get_ident().is_some_and(|name| name == "ignore")
             || path.get_ident().is_some_and(|name| name == "should_panic")
         {
@@ -61,19 +68,20 @@ pub fn flaky(
         }
     });
 
-    let (test_attr, catch_unwind, async_, await_) = match tokio {
-        Some(attr) => (
+    let (test_attr, catch_unwind, async_, await_) = match (tokio, sqlx) {
+        (Some(attr), None) | (None, Some(attr)) => (
             quote!(#attr),
             quote!(::#self_crate::_priv::futures::future::FutureExt::catch_unwind(#name())),
             quote!(async),
             quote!(.await),
         ),
-        None => (
+        (None, None) => (
             quote!(#[test]),
             quote!(::std::panic::catch_unwind(#name)),
             quote!(),
             quote!(),
         ),
+        _ => unreachable!("impossible combination of #[tokio::test] and #[sqlx::test]"),
     };
 
     quote! {

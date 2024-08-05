@@ -14,12 +14,11 @@
     clippy::unwrap_used,
     clippy::useless_let_if_seq
 )]
-#![warn(clippy::pedantic)]
+#![allow(clippy::pedantic)]
 
 use proc_macro_crate::{crate_name, FoundCrate};
 use proc_macro_error::{abort_call_site, proc_macro_error};
 use quote::{format_ident, quote};
-use syn::Ident;
 
 #[proc_macro_error]
 #[proc_macro_attribute]
@@ -37,19 +36,19 @@ pub fn flaky(
         Err(err) => abort_call_site!("can't find crate name for `mark_flaky_tests`: {}", err),
     };
     let mut func = syn::parse_macro_input!(body as syn::ItemFn);
-    let name_original = func.sig.ident.clone();
-    func.sig.ident = Ident::new(&format!("{}_flaky", func.sig.ident), func.sig.ident.span());
     let name = &func.sig.ident;
 
     let args = &func.sig.inputs;
     let return_ty = &func.sig.output;
 
+    let mut test = None;
     let mut tokio = None;
     let mut sqlx = None;
     let mut attrs = Vec::new();
     func.attrs.retain(|attr| {
         let path = attr.path();
         if path.get_ident().is_some_and(|name| name == "test") {
+            test = Some(attr.clone());
             false
         } else if path.segments.len() == 2
             && path.segments[0].ident == "tokio"
@@ -73,15 +72,15 @@ pub fn flaky(
         }
     });
 
-    let (test_attr, catch_unwind, async_, await_, inputs) = match (tokio, sqlx) {
-        (Some(attr), None) => (
+    let (test_attr, catch_unwind, async_, await_, inputs) = match (tokio, sqlx, test) {
+        (Some(attr), None, None) => (
             quote!(#attr),
             quote!(::#self_crate::_priv::futures::future::FutureExt::catch_unwind(#name())),
             quote!(async),
             quote!(.await),
             quote!(),
         ),
-        (None, Some(attr)) => {
+        (None, Some(attr), None) => {
             let pool = match args.first().expect("pool") {
                 syn::FnArg::Typed(pat) => match &*pat.pat {
                     syn::Pat::Ident(pat) => &pat.ident,
@@ -98,7 +97,14 @@ pub fn flaky(
                 quote!(#pool.clone()),
             )
         }
-        (None, None) => (
+        (None, None, Some(attr)) => (
+            quote!(#attr),
+            quote!(::std::panic::catch_unwind(#name)),
+            quote!(),
+            quote!(),
+            quote!(),
+        ),
+        (None, None, None) => (
             quote!(),
             quote!(::std::panic::catch_unwind(#name)),
             quote!(),
@@ -111,7 +117,7 @@ pub fn flaky(
     quote! {
         #test_attr
         #(#attrs)*
-        #async_ fn #name_original(#args) #return_ty {
+        #async_ fn #name(#args) #return_ty {
             #func
 
             let retries_var = ::std::env::var("MARK_FLAKY_TESTS_RETRIES");

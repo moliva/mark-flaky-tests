@@ -19,6 +19,7 @@
 use proc_macro_crate::{crate_name, FoundCrate};
 use proc_macro_error::{abort_call_site, proc_macro_error};
 use quote::{format_ident, quote};
+use syn::Ident;
 
 #[proc_macro_error]
 #[proc_macro_attribute]
@@ -36,7 +37,10 @@ pub fn flaky(
         Err(err) => abort_call_site!("can't find crate name for `mark_flaky_tests`: {}", err),
     };
     let mut func = syn::parse_macro_input!(body as syn::ItemFn);
+    let name_original = func.sig.ident.clone();
+    func.sig.ident = Ident::new(&format!("{}_flaky", func.sig.ident), func.sig.ident.span());
     let name = &func.sig.ident;
+
     let args = &func.sig.inputs;
     let return_ty = &func.sig.output;
 
@@ -88,14 +92,14 @@ pub fn flaky(
 
             (
                 quote!(#attr),
-                quote!(::#self_crate::_priv::futures::future::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(#name(#pool .clone())))),
+                quote!(::#self_crate::_priv::futures::future::FutureExt::catch_unwind(::std::panic::AssertUnwindSafe(#name(#pool .clone())))),
                 quote!(async),
                 quote!(.await),
                 quote!(#pool.clone()),
             )
         }
         (None, None) => (
-            quote!(#[test]),
+            quote!(),
             quote!(::std::panic::catch_unwind(#name)),
             quote!(),
             quote!(),
@@ -107,7 +111,7 @@ pub fn flaky(
     quote! {
         #test_attr
         #(#attrs)*
-        #async_ fn #name(#args) #return_ty {
+        #async_ fn #name_original(#args) #return_ty {
             #func
 
             let retries_var = ::std::env::var("MARK_FLAKY_TESTS_RETRIES");

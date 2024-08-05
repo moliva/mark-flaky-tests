@@ -111,7 +111,7 @@ pub fn flaky(
             quote!(),
             quote!(),
         ),
-        _ => unreachable!("impossible combination of #[tokio::test] and #[sqlx::test]"),
+        _ => unreachable!("at most one of `tokio::test`, `sqlx::test`, or `test` attribute is allowed at a time"),
     };
 
     quote! {
